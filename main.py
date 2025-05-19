@@ -1,16 +1,19 @@
+import os
 import hashlib
 import numpy as np
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.neighbors import NearestNeighbors
 from sklearn.model_selection import train_test_split
 import joblib
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, ApplicationBuilder
 import telegram
-import os
-from functools import lru_cache
+from flask import Flask, request
+import threading
 
 # ================== CONFIG ==================
 BOT_TOKEN = '7915783739:AAFoaBlYwa60ete0oBFVpCXLzjE64w15wzY'  # Thay bằng token của bạn
+PORT = int(os.environ.get('PORT', 5000))  # Render sẽ cấp PORT tự động
+APP_URL = os.environ.get("RENDER_EXTERNAL_URL")  # Ví dụ: https://your-bot.onrender.com 
 bot = telegram.Bot(token=BOT_TOKEN)
 
 # ================== HASHING ==================
@@ -61,7 +64,6 @@ else:
     knn_model = joblib.load(KNN_PATH)
 
 # ================== HÀM PHÂN TÍCH MD5 ==================
-@lru_cache(maxsize=128)
 def analyze_md5(text_input):
     if len(text_input) > 100:
         return "⚠️ Chuỗi quá dài. Vui lòng nhập chuỗi dưới 100 ký tự."
@@ -88,31 +90,45 @@ def analyze_md5(text_input):
     except Exception as e:
         return f"❌ Có lỗi xảy ra: {str(e)}"
 
-# ================== TELEGRAM HANDLERS ==================
-def start(update, context):
-    update.message.reply_text(
-        "👋 Chào mừng bạn đến với **MD5 Analyzer Bot**!\n"
-        "Gửi bất kỳ chuỗi nào để tạo và phân tích MD5.\n"
-        "Bot nhẹ, nhanh, thông minh và hoàn toàn miễn phí!",
-        parse_mode=telegram.ParseMode.MARKDOWN
-    )
+# ================== FLASK SERVER ==================
+app = Flask(__name__)
 
-def handle_message(update, context):
-    user_input = update.message.text.strip()
-    response = analyze_md5(user_input)
-    update.message.reply_text(response, parse_mode=telegram.ParseMode.MARKDOWN)
+@app.route('/')
+def home():
+    return "Bot đang hoạt động!"
 
-# ================== MAIN BOT ==================
+@app.route(f'/webhook', methods=['POST'])
+def webhook():
+    update = telegram.Update.de_json(request.get_json(force=True), bot)
+    application = setup_application()
+    application.process_update(update)
+    return 'OK'
+
+# ================== SET UP BOT HANDLERS ==================
+def setup_application():
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    def start(update: telegram.Update, context: telegram.ext.CallbackContext):
+        context.bot.send_message(chat_id=update.effective_chat.id,
+                                 text="👋 Chào mừng bạn đến với **MD5 Analyzer Bot**!\n"
+                                      "Gửi bất kỳ chuỗi nào để tạo và phân tích MD5.\n"
+                                      "Bot nhẹ, nhanh, thông minh và hoàn toàn miễn phí!",
+                                 parse_mode=telegram.ParseMode.MARKDOWN)
+
+    def handle_message(update: telegram.Update, context: telegram.ext.CallbackContext):
+        user_input = update.message.text.strip()
+        response = analyze_md5(user_input)
+        context.bot.send_message(chat_id=update.effective_chat.id, text=response,
+                                 parse_mode=telegram.ParseMode.MARKDOWN)
+
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
+
+    return application
+
+# ================== START SERVER ==================
 def main():
-    updater = Updater(BOT_TOKEN, use_context=True)
-    dp = updater.dispatcher
-
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
-
-    print("✅ Bot đang chạy... (nhấn Ctrl+C để dừng)")
-    updater.start_polling()
-    updater.idle()
+    app.run(host='0.0.0.0', port=PORT)
 
 if __name__ == '__main__':
     main()
